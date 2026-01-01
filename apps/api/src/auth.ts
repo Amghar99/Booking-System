@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
+import jwt, { type SignOptions } from "jsonwebtoken";
 import { prisma } from "./prisma.js";
 import { requireAuth } from "./middleware.js";
 
@@ -21,17 +21,18 @@ function setAccessCookie(res: any, token: string) {
   res.cookie("access_token", token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: false, // sett true i prod (https)
+    secure: false, // sett true i prod (HTTPS)
     path: "/",
   });
 }
 
 router.post("/register", async (req, res) => {
   const parsed = registerSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ errors: parsed.error.flatten() });
+  if (!parsed.success) {
+    return res.status(400).json({ errors: parsed.error.flatten() });
+  }
 
   const { email, password } = parsed.data;
-
   const passwordHash = await bcrypt.hash(password, 12);
 
   try {
@@ -42,15 +43,19 @@ router.post("/register", async (req, res) => {
 
     return res.status(201).json(user);
   } catch (e: any) {
-    // Unique constraint violation (email)
-    if (e?.code === "P2002") return res.status(409).json({ message: "Email already in use" });
+    // Prisma unique constraint violation
+    if (e?.code === "P2002") {
+      return res.status(409).json({ message: "Email already in use" });
+    }
     return res.status(500).json({ message: "Server error" });
   }
 });
 
 router.post("/login", async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ errors: parsed.error.flatten() });
+  if (!parsed.success) {
+    return res.status(400).json({ errors: parsed.error.flatten() });
+  }
 
   const { email, password } = parsed.data;
 
@@ -60,10 +65,18 @@ router.post("/login", async (req, res) => {
   const ok = await bcrypt.compare(password, user.passwordHash);
   if (!ok) return res.status(401).json({ message: "Invalid credentials" });
 
+  const secret = process.env.JWT_ACCESS_SECRET;
+  if (!secret) {
+    return res.status(500).json({ message: "JWT_ACCESS_SECRET is missing" });
+  }
+
+  const expiresIn: SignOptions["expiresIn"] =
+    (process.env.JWT_ACCESS_EXPIRES_IN ?? "15m") as SignOptions["expiresIn"];
+
   const token = jwt.sign(
     { userId: user.id, role: user.role },
-    process.env.JWT_ACCESS_SECRET!,
-    { expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || "15m" }
+    secret,
+    { expiresIn }
   );
 
   setAccessCookie(res, token);

@@ -1,2 +1,14 @@
 node_modules
 cookies.txt
+
+# Env files (DO NOT COMMIT)
+.env
+.env.*
+!.env.example
+
+# Local curl cookies
+cookies.txt
+
+# Node / build
+node_modules/
+dist/

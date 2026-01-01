@@ -12,10 +12,76 @@ enum Role {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
+  id           String    @id @default(cuid())
+  email        String    @unique
   passwordHash String
-  role         Role     @default(USER)
-  createdAt    DateTime @default(now())
+  role         Role      @default(USER)
+
+  firstName    String
+  lastName     String
+  phone        String
+  gender       Gender    @default(UNSPECIFIED)
+  birthYear    Int?
+
+  createdAt    DateTime  @default(now())
+  bookings     Booking[]
+}
+
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+}
+
+model Service {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  durationMin Int      @default(15)
+  bufferMin   Int      @default(5)
+  priceOre    Int      @default(15000)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  slots    AvailabilitySlot[]
+  bookings Booking[]
+}
+
+
+model AvailabilitySlot {
+  id        String   @id @default(cuid())
+  serviceId String
+  startAt   DateTime
+  endAt     DateTime
+  createdAt DateTime @default(now())
+
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@index([serviceId, startAt])
+}
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  UNSPECIFIED
+}
+
+model Booking {
+  id          String        @id @default(cuid())
+  userId      String
+  serviceId   String
+  startAt     DateTime
+  endAt       DateTime
+  status      BookingStatus @default(CONFIRMED)
+  note        String?
+  cancelledAt DateTime?
+  createdAt   DateTime      @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@index([serviceId, startAt])
+  @@index([userId, createdAt])
 }
 

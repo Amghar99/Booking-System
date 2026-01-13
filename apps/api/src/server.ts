@@ -10,7 +10,6 @@ const app = express();
 
 app.use(express.json());
 app.use(cookieParser());
-app.use("/admin", adminRouter);
 
 app.use(
   cors({
@@ -22,6 +21,7 @@ app.use(
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
 app.use("/auth", authRouter);
+app.use("/admin", adminRouter);
 app.use("/bookings", bookingsRouter);
 
 const port = Number(process.env.PORT || 4000);

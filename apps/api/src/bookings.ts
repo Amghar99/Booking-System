@@ -25,7 +25,7 @@ const createBookingSchema = z.object({
   serviceId: z.string().min(1),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD"),
   startTime: z.string().regex(/^\d{2}:\d{2}$/, "startTime must be HH:mm"),
-  sessions: z.number().int().min(1).max(30), // juster max hvis du vil
+  sessions: z.number().int().min(1).max(30),
   note: z.string().max(500).optional(),
 });
 
@@ -54,8 +54,6 @@ function isAlignedToStep(dt: DateTime): boolean {
 /**
  * Ensure all sessions fit inside opening hours (Oslo time).
  * Each session is 15 min, next starts after 20 min.
- * So last session start must be <= 14:40 (if 1 session)
- * For multiple sessions: last start <= 14:40 - (sessions-1)*20
  */
 function validateWithinBusinessHours(start: DateTime, sessions: number) {
   const dayStart = start.set(DAY_START);
@@ -65,16 +63,13 @@ function validateWithinBusinessHours(start: DateTime, sessions: number) {
     return { ok: false, message: "Start time is before opening hours (08:00)." };
   }
 
-  // Last session start time:
   const lastStart = start.plus({ minutes: (sessions - 1) * STEP_MIN });
-  // Last session end time:
   const lastEnd = lastStart.plus({ minutes: SESSION_MIN });
 
   if (lastEnd > dayEnd) {
     return {
       ok: false,
-      message:
-        "Selected sessions exceed opening hours (must end by 15:00 Oslo time).",
+      message: "Selected sessions exceed opening hours (must end by 15:00 Oslo time).",
     };
   }
 
@@ -92,6 +87,104 @@ function buildSessionStartsUtc(startOslo: DateTime, sessions: number): Date[] {
   }
   return starts;
 }
+
+/**
+ * Returns true if [startAt, endAt] is fully contained inside at least one slot.
+ */
+function isSessionCoveredBySlots(
+  startAt: Date,
+  endAt: Date,
+  slots: { startAt: Date; endAt: Date }[]
+) {
+  return slots.some((s) => s.startAt <= startAt && s.endAt >= endAt);
+}
+
+/**
+ * GET /bookings/availability?serviceId=...&date=YYYY-MM-DD
+ * Returns available start times (HH:mm, Oslo time) based on:
+ * - Admin AvailabilitySlot windows (DB UTC)
+ * - Already booked slots (status != CANCELLED)
+ * - 20-min grid from 08:00
+ */
+router.get("/availability", async (req, res) => {
+  const serviceId = String(req.query.serviceId ?? "");
+  const date = String(req.query.date ?? "");
+
+  if (!serviceId) return res.status(400).json({ message: "serviceId is required" });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ message: "date must be YYYY-MM-DD" });
+  }
+
+  // 1) service exists + active
+  const service = await prisma.service.findUnique({
+    where: { id: serviceId },
+    select: { id: true, isActive: true, durationMin: true },
+  });
+
+  if (!service || !service.isActive) {
+    return res.status(404).json({ message: "Service not found or inactive" });
+  }
+
+  // Keep same fixed rule as POST /bookings
+  if (service.durationMin !== SESSION_MIN) {
+    return res.status(400).json({ message: `Service duration must be ${SESSION_MIN} minutes` });
+  }
+
+  // 2) Build Oslo day start/end and convert to UTC for DB queries
+  const [y, m, d] = date.split("-").map(Number);
+  const dayStartOslo = DateTime.fromObject(
+    { year: y, month: m, day: d, ...DAY_START },
+    { zone: OSLO_TZ }
+  );
+  const dayEndOslo = DateTime.fromObject(
+    { year: y, month: m, day: d, ...DAY_END },
+    { zone: OSLO_TZ }
+  );
+
+  const dayStartUtc = dayStartOslo.toUTC().toJSDate();
+  const dayEndUtc = dayEndOslo.toUTC().toJSDate();
+
+  // 3) Fetch admin slots overlapping this day
+  const slots = await prisma.availabilitySlot.findMany({
+    where: {
+      serviceId,
+      startAt: { lt: dayEndUtc },
+      endAt: { gt: dayStartUtc },
+    },
+    orderBy: { startAt: "asc" },
+    select: { startAt: true, endAt: true },
+  });
+
+  // 4) Fetch already booked session starts this day
+  const booked = await prisma.booking.findMany({
+    where: {
+      serviceId,
+      status: { not: "CANCELLED" },
+      startAt: { gte: dayStartUtc, lt: dayEndUtc },
+    },
+    select: { startAt: true },
+  });
+
+  const bookedSet = new Set(booked.map((b) => b.startAt.toISOString()));
+
+  // 5) Generate candidate times on 20-min grid and filter by slot coverage + not booked
+  const times: string[] = [];
+
+  for (let t = dayStartOslo; t < dayEndOslo; t = t.plus({ minutes: STEP_MIN })) {
+    const startUtc = t.toUTC().toJSDate();
+    const endUtc = new Date(startUtc.getTime() + SESSION_MIN * 60 * 1000);
+
+    const covered = slots.some((s) => s.startAt <= startUtc && s.endAt >= endUtc);
+    if (!covered) continue;
+
+    if (bookedSet.has(startUtc.toISOString())) continue;
+
+    // Return Oslo time for UI
+    times.push(t.toFormat("HH:mm"));
+  }
+
+  return res.json({ serviceId, date, times });
+});
 
 /**
  * POST /bookings
@@ -117,7 +210,6 @@ router.post("/", requireAuth, async (req, res) => {
   }
 
   // 2) Enforce alignment to 20-min grid
-  const dayStart = startOslo.set(DAY_START);
   if (!isAlignedToStep(startOslo)) {
     return res.status(400).json({
       message: `startTime must be aligned to ${STEP_MIN}-minute slots from 08:00 (e.g. 08:00, 08:20, 08:40 ...)`,
@@ -145,8 +237,7 @@ router.post("/", requireAuth, async (req, res) => {
     return res.status(404).json({ message: "Service not found or inactive" });
   }
 
-  // Enforce 15 min sessions (since your business rule is fixed)
-  // If you want it flexible per service, remove this check.
+  // Enforce 15 min sessions (fixed rule for this booking flow)
   if (service.durationMin !== SESSION_MIN) {
     return res.status(400).json({
       message: `Service duration must be ${SESSION_MIN} minutes for this booking flow`,
@@ -156,10 +247,33 @@ router.post("/", requireAuth, async (req, res) => {
   // 5) Build all session starts in UTC for DB
   const startsUtc = buildSessionStartsUtc(startOslo, sessions);
 
+  // 5.1) Enforce admin availability slots for this service (UTC in DB)
+  const firstStartUtc = startsUtc[0];
+  const lastStartUtc = startsUtc[startsUtc.length - 1];
+  const lastEndUtc = new Date(lastStartUtc.getTime() + SESSION_MIN * 60 * 1000);
+
+  const candidateSlots = await prisma.availabilitySlot.findMany({
+    where: {
+      serviceId,
+      startAt: { lt: lastEndUtc },
+      endAt: { gt: firstStartUtc },
+    },
+    orderBy: { startAt: "asc" },
+    select: { startAt: true, endAt: true },
+  });
+
+  for (const startAt of startsUtc) {
+    const endAt = new Date(startAt.getTime() + SESSION_MIN * 60 * 1000);
+    if (!isSessionCoveredBySlots(startAt, endAt, candidateSlots)) {
+      return res.status(400).json({
+        message: "Selected time is not within admin availability for this service",
+      });
+    }
+  }
+
   // 6) Transaction: check conflicts + create bookings
   try {
     const created = await prisma.$transaction(async (tx) => {
-      // Check if any of the starts are already booked (status != CANCELLED)
       const conflicts = await tx.booking.findMany({
         where: {
           serviceId,
@@ -173,7 +287,6 @@ router.post("/", requireAuth, async (req, res) => {
         return { ok: false as const, conflicts };
       }
 
-      // Create one Booking per session (recommended)
       const rows = startsUtc.map((startAt) => ({
         userId,
         serviceId,
@@ -183,25 +296,12 @@ router.post("/", requireAuth, async (req, res) => {
         note: note ?? null,
       }));
 
-      const result = await tx.booking.createMany({
-        data: rows,
-      });
+      const result = await tx.booking.createMany({ data: rows });
 
-      // Return the created slots (fetch them back with IDs)
-      // createMany doesn't return rows, so we fetch by userId/serviceId/time range.
       const createdBookings = await tx.booking.findMany({
-        where: {
-          userId,
-          serviceId,
-          startAt: { in: startsUtc },
-        },
+        where: { userId, serviceId, startAt: { in: startsUtc } },
         orderBy: { startAt: "asc" },
-        select: {
-          id: true,
-          startAt: true,
-          endAt: true,
-          status: true,
-        },
+        select: { id: true, startAt: true, endAt: true, status: true },
       });
 
       return { ok: true as const, count: result.count, bookings: createdBookings };

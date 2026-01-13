@@ -6,20 +6,15 @@ datasource db {
   provider = "postgresql"
 }
 
-enum Role {
-  ADMIN
-  USER
-}
-
 model User {
   id           String    @id @default(cuid())
   email        String    @unique
   passwordHash String
   role         Role      @default(USER)
 
-  firstName    String
-  lastName     String
-  phone        String
+  firstName    String?
+  lastName     String?
+  phone        String?
   gender       Gender    @default(UNSPECIFIED)
   birthYear    Int?
 
@@ -28,26 +23,18 @@ model User {
 }
 
 
-enum BookingStatus {
-  PENDING
-  CONFIRMED
-  CANCELLED
-}
-
 model Service {
-  id          String   @id @default(cuid())
+  id          String             @id @default(cuid())
   name        String
   description String?
-  durationMin Int      @default(15)
-  bufferMin   Int      @default(5)
-  priceOre    Int      @default(15000)
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-
-  slots    AvailabilitySlot[]
-  bookings Booking[]
+  durationMin Int                @default(15)
+  bufferMin   Int                @default(5)
+  priceOre    Int                @default(15000)
+  isActive    Boolean            @default(true)
+  createdAt   DateTime           @default(now())
+  slots       AvailabilitySlot[]
+  bookings    Booking[]
 }
-
 
 model AvailabilitySlot {
   id        String   @id @default(cuid())
@@ -55,16 +42,9 @@ model AvailabilitySlot {
   startAt   DateTime
   endAt     DateTime
   createdAt DateTime @default(now())
-
-  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  service   Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
 
   @@index([serviceId, startAt])
-}
-enum Gender {
-  MALE
-  FEMALE
-  OTHER
-  UNSPECIFIED
 }
 
 model Booking {
@@ -77,11 +57,27 @@ model Booking {
   note        String?
   cancelledAt DateTime?
   createdAt   DateTime      @default(now())
-
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  service     Service       @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([serviceId, startAt])
   @@index([userId, createdAt])
 }
 
+enum Role {
+  ADMIN
+  USER
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  UNSPECIFIED
+}

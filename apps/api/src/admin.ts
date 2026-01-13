@@ -5,7 +5,7 @@ import { requireAuth, requireRole } from "./middleware.js";
 
 const router = Router();
 
-// --- PING (eksisterende) ---
+// --- PING ---
 router.get("/ping", requireAuth, requireRole("ADMIN"), (_req, res) => {
   res.json({ ok: true, message: "admin access ok" });
 });
@@ -20,7 +20,9 @@ const createServiceSchema = z.object({
 
 router.post("/services", requireAuth, requireRole("ADMIN"), async (req, res) => {
   const parsed = createServiceSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ errors: parsed.error.flatten() });
+  if (!parsed.success) {
+    return res.status(400).json({ errors: parsed.error.flatten() });
+  }
 
   const { name, description, durationMin, isActive } = parsed.data;
 
@@ -40,16 +42,22 @@ const createSlotSchema = z.object({
 
 router.post("/slots", requireAuth, requireRole("ADMIN"), async (req, res) => {
   const parsed = createSlotSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ errors: parsed.error.flatten() });
+  if (!parsed.success) {
+    return res.status(400).json({ errors: parsed.error.flatten() });
+  }
 
   const { serviceId, startAt, endAt } = parsed.data;
   const startDate = new Date(startAt);
   const endDate = new Date(endAt);
 
-  if (!(startDate < endDate)) return res.status(400).json({ message: "startAt must be before endAt" });
+  if (!(startDate < endDate)) {
+    return res.status(400).json({ message: "startAt must be before endAt" });
+  }
 
   const service = await prisma.service.findUnique({ where: { id: serviceId } });
-  if (!service) return res.status(404).json({ message: "Service not found" });
+  if (!service) {
+    return res.status(404).json({ message: "Service not found" });
+  }
 
   const slot = await prisma.availabilitySlot.create({
     data: {
@@ -62,7 +70,7 @@ router.post("/slots", requireAuth, requireRole("ADMIN"), async (req, res) => {
   res.status(201).json(slot);
 });
 
-// --- GET ALL SERVICES ---
+// --- GET ALL SERVICES (ADMIN) ---
 router.get("/services", requireAuth, requireRole("ADMIN"), async (_req, res) => {
   const services = await prisma.service.findMany({
     orderBy: { createdAt: "desc" },
@@ -71,7 +79,7 @@ router.get("/services", requireAuth, requireRole("ADMIN"), async (_req, res) => 
   res.json(services);
 });
 
-// --- GET ALL SLOTS FOR A SERVICE ---
+// --- GET ALL SLOTS FOR A SERVICE (ADMIN) ---
 router.get("/slots/:serviceId", requireAuth, requireRole("ADMIN"), async (req, res) => {
   const { serviceId } = req.params;
   const slots = await prisma.availabilitySlot.findMany({
@@ -79,6 +87,26 @@ router.get("/slots/:serviceId", requireAuth, requireRole("ADMIN"), async (req, r
     orderBy: { startAt: "asc" },
   });
   res.json(slots);
+});
+
+// --- PUBLIC: LIST ACTIVE SERVICES (NO AUTH) ---
+router.get("/public/services", async (_req, res) => {
+  const services = await prisma.service.findMany({
+    where: { isActive: true },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      name: true,
+      description: true,
+      durationMin: true,
+      bufferMin: true,
+      priceOre: true,
+      isActive: true,
+      createdAt: true,
+    },
+  });
+
+  res.json(services);
 });
 
 export default router;

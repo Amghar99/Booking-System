@@ -12,3 +12,7 @@ cookies.txt
 # Node / build
 node_modules/
 dist/
+
+# local test cookies
+cookies_*.txt
+apps/api/cookies_*.txt
